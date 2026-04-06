@@ -2882,3 +2882,240 @@ def get_model_id(item_id: UUID, prefix: str = None, headers: dict = None):
     response = _base_api(request=f"metadata/models/{item_id}", client="internal")
 
     return response.json().get("model", {}).get("id")
+
+def _resolve_function(func_name: str, namespace):
+    """
+    Resolve a function name string into an actual callable/function object.
+
+    Rules:
+      - Only search inside the provided namespace (usually globals()).
+      - Support dotted paths like "admin.list_events".
+      - Do NOT import modules.
+      - Fail immediately if any part of the path does not exist.
+    """
+
+    # Split the function name into parts (e.g., "admin.list_events" → ["admin", "list_events"])
+    parts = func_name.split(".")
+
+    # ---------------------------------------------------------
+    # Case 1: simple function name (no dots)
+    # ---------------------------------------------------------
+    if len(parts) == 1:
+        name = parts[0]
+
+        # The function must exist directly in the namespace
+        if name in namespace:
+            return namespace[name]
+
+        # Fail if not found
+        raise ValueError(f"{icons.red_dot} Function '{func_name}' not found in namespace!")
+
+    # ---------------------------------------------------------
+    # Case 2: dotted path (object.attribute.attribute...)
+    # ---------------------------------------------------------
+
+    # The first element must exist in the namespace (e.g., "admin")
+    root_name = parts[0]
+    if root_name not in namespace:
+        raise ValueError(f"{icons.red_dot} '{root_name}' not found in namespace!")
+
+    # Start resolving from the root object
+    obj = namespace[root_name]
+
+    # Walk through each attribute in the dotted path
+    for attr in parts[1:]:
+        # Each attribute must exist on the current object
+        if not hasattr(obj, attr):
+            raise ValueError(f"{icons.red_dot} Attribute '{attr}' not found in '{root_name}'!")
+        obj = getattr(obj, attr)
+
+    # Return the final resolved object (function, method, etc.)
+    return obj
+
+def _count_rows(obj):
+    """
+    Count the number of logical records in an arbitrary structure.
+    Ensures consistent results between dicts and pandas DataFrames.
+
+    Error handling:
+    - Gracefully handles unexpected types
+    - Protects against malformed dicts/lists
+    - Never crashes on non-iterable or mixed-type structures
+    """
+
+    try:
+        # DataFrame → number of rows
+        if isinstance(obj, pd.DataFrame):
+            return len(obj)
+
+        # Series → number of elements
+        if isinstance(obj, pd.Series):
+            return len(obj)
+
+        # List of dicts → treat each element as a row
+        if isinstance(obj, list):
+            if all(isinstance(x, dict) for x in obj):
+                return len(obj)
+            # Mixed list → fallback to 1 row
+            return 1
+
+        # Dict with lists → assume lists represent columns
+        if isinstance(obj, dict):
+            list_lengths = []
+            for v in obj.values():
+                if isinstance(v, list):
+                    try:
+                        list_lengths.append(len(v))
+                    except Exception:
+                        # Non-countable list element → ignore
+                        pass
+
+            if list_lengths:
+                return max(list_lengths)  # pandas-like behavior
+
+            return 1  # single logical record
+
+        # Anything else → treat as 1 record
+        return 1
+
+    except Exception as e:
+        # Optional: enable this for debugging
+        # print(f"count_rows error: {e} (type={type(obj)})")
+        return 1
+
+def _deep_merge(a, b):
+    """
+    Recursively merge two objects of arbitrary structure.
+
+    Merge rules:
+    - pandas.DataFrame + pandas.DataFrame:
+        Concatenate rows (axis=0), index ignored.
+    - pandas.Series + pandas.Series:
+        Concatenate values (axis=0), index ignored.
+    - dict + dict:
+        Recursively merge keys. If a key exists in both, merge their values.
+    - list + list:
+        Concatenate lists.
+    - Any other combination:
+        Primitive overwrite → b replaces a.
+
+    Parameters
+    ----------
+    a : any
+        First object.
+    b : any
+        Second object.
+
+    Returns
+    -------
+    any
+        The merged result following the rules above.
+    """
+
+    # DataFrame + DataFrame → row-wise concat
+    if isinstance(a, pd.DataFrame) and isinstance(b, pd.DataFrame):
+        return pd.concat([a, b], ignore_index=True)
+
+    # Series + Series → concat
+    if isinstance(a, pd.Series) and isinstance(b, pd.Series):
+        return pd.concat([a, b], ignore_index=True)
+
+    # dict + dict → recursive merge
+    if isinstance(a, dict) and isinstance(b, dict):
+        merged = {}
+        keys = set(a.keys()) | set(b.keys())
+        for k in keys:
+            if k in a and k in b:
+                merged[k] = deep_merge(a[k], b[k])
+            elif k in a:
+                merged[k] = a[k]
+            else:
+                merged[k] = b[k]
+        return merged
+
+    # list + list → concatenate
+    if isinstance(a, list) and isinstance(b, list):
+        return a + b
+
+    # Anything else → b wins
+    return b
+
+@log
+def execute_in_timeslots(func_name, parameters_list, max_per_slot, slot_seconds, namespace):
+    """
+    Execute a function repeatedly with rate limiting, merging results and
+    logging progress.
+
+    - Resolves the target function once from the given namespace.
+    - Processes each task as a separate call with arguments in tasks.
+    - Enforces a sliding‑window limit: max_per_slot calls per slot_seconds.
+    - Sleeps or resets the window when limits are reached.
+    - Merges results using deep_merge and counts rows via count_rows.
+    - On error, logs the failure and returns partial results immediately.
+
+    Returns the merged result of calling the function func_name with the parameters in the parameters_list.
+    """
+
+    results = None          # Accumulated DataFrame OR merged dict
+    results_dict = []       # Store raw dict results
+    total_rows = 0          # Total number of rows returned across all calls
+
+    # Initialize sliding‑window rate limiting
+    window_start = time.time()
+    calls_in_window = 1
+
+    # Resolve the function only once for efficiency
+    func = _resolve_function(func_name, namespace)
+
+    # Iterate over each parameters
+    for idx, params in enumerate(parameters_list, start=1):
+
+        elapsed = time.time() - window_start
+
+        print("\n====================================================")
+        print(f"Iteration {idx}")
+
+        if elapsed >= slot_seconds:
+            print(f"{icons.in_progress} Window expired → resetting window.")
+            window_start = time.time()
+            elapsed = time.time() - window_start
+            calls_in_window = 1
+
+        elif calls_in_window > max_per_slot:
+            sleep_time = slot_seconds - elapsed
+            print(f"{icons.in_progress} Rate limit reached → sleeping {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+            window_start = time.time()
+            elapsed = time.time() - window_start
+            calls_in_window = 1
+            print("{icons.in_progress} Window reset after sleep.")
+
+        print(f"Elapsed in current window: {elapsed:.2f}s")
+        print(f"Calls in current window: {calls_in_window}/{max_per_slot}")
+
+        try:
+            call_str = f"{func_name}(" + ", ".join([f"{k}={repr(v)}" for k, v in params.items()]) + ")"
+            print(f"Executing now: {call_str}")
+
+            # Execute the resolved function
+            result = func(**params)
+
+            rows_idx = 0
+            results = _deep_merge(results, result)
+            rows_idx = _count_rows(result)
+
+            total_rows += rows_idx
+
+            print(f"{icons.green_dot} Returned '{rows_idx}' rows: {call_str}.")
+            print(f"{icons.green_dot} Partial results '{total_rows}'.")
+
+            calls_in_window += 1
+
+        except Exception as e:
+            print(f"{icons.red_dot} ERROR during execution of {call_str}: '{e}'!")
+            print(f"{icons.yellow_dot} Returning partial results: '{total_rows}'.")
+            return results
+
+    print(f"{icons.green_dot} Total results: '{total_rows}'.")
+
+    return results

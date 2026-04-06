@@ -1,11 +1,13 @@
 import pandas as pd
 from typing import Optional
 from dateutil.parser import parse as dtparser
+from datetime import datetime, timedelta
 from sempy._utils._log import log
 from sempy_labs._helper_functions import (
     _base_api,
     _create_dataframe,
     _update_dataframe_datatypes,
+    execute_in_timeslots,
 )
 import sempy_labs._icons as icons
 
@@ -169,3 +171,70 @@ def list_activity_events(
         return df
     else:
         return response_json
+
+@log
+def list_activity_events_multiple_days(
+    start_day: str,
+    num_days: int,
+    inc_days: int = 1,
+    activity_filter: Optional[str] = None,
+    user_id_filter: Optional[str] = None,
+    return_dataframe: bool = True,
+) -> pd.DataFrame | dict:
+    """
+    Shows a list of audit activity events for a tenant.
+
+    This is a wrapper function for the following API: `Admin - Get Activity Events <https://learn.microsoft.com/rest/api/power-bi/admin/get-activity-events>`_.
+
+    Service Principal Authentication is supported (see `here <https://github.com/microsoft/semantic-link-labs/blob/main/notebooks/Service%20Principal.ipynb>`_ for examples).
+
+    Parameters
+    ----------
+    start_time : str
+        Start date and time of the window for audit event results. Example: "2024-09-25T07:55:00".
+    end_time : str
+        End date and time of the window for audit event results. Example: "2024-09-25T08:55:00".
+    activity_filter : str, default=None
+        Filter value for activities. Example: 'viewreport'.
+    user_id_filter : str, default=None
+        Email address of the user.
+    return_dataframe : bool, default=True
+        If True the response is a pandas.DataFrame. If False returns a dict. Default True
+
+    Returns
+    -------
+    pandas.DataFrame | dict
+        A pandas dataframe or dict showing a list of audit activity events for a tenant.
+    """
+
+    func_name = "list_activity_events"
+    parameters_list = []
+    max_per_slot = 200
+    slot_seconds = 60
+    namespace = globals()
+    
+    # Normalize start_day
+    start_date = datetime.strptime(start_day, "%Y-%m-%d").date()
+
+    # Build the list of tasks
+    for i in range(0, num_days, inc_days):
+        day = start_date + timedelta(days=i)
+
+        start_iso = day.strftime("%Y-%m-%dT00:00:00.000Z")
+        end_iso   = day.strftime("%Y-%m-%dT23:59:59.999Z")
+
+        parameters_list.append(
+            {
+                "start_time": start_iso,
+                "end_time": end_iso,
+                "activity_filter": activity_filter,
+                "user_id_filter": user_id_filter,
+                "return_dataframe": return_dataframe,
+            }
+        )
+
+    results = (
+        execute_in_timeslots(func_name, parameters_list, max_per_slot, slot_seconds, namespace)
+    )
+
+    return results
