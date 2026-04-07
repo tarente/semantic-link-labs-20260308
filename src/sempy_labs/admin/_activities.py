@@ -217,8 +217,8 @@ def list_activity_events_multiple_days(
     start_date = datetime.strptime(start_day, "%Y-%m-%d").date()
 
     # Build the list of tasks
-    for i in range(0, num_days, inc_days):
-        day = start_date + timedelta(days=i)
+    for i in range(num_days):
+        day = start_date + timedelta(days = i * inc_days)
 
         start_iso = day.strftime("%Y-%m-%dT00:00:00.000Z")
         end_iso   = day.strftime("%Y-%m-%dT23:59:59.999Z")

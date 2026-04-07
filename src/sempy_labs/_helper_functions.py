@@ -2906,31 +2906,22 @@ def _resolve_function(func_name: str, namespace):
         # The function must exist directly in the namespace
         if name in namespace:
             return namespace[name]
+        else:
+            # Fail if not found
+            raise ValueError(f"{icons.red_dot} Function '{func_name}' not found in namespace!")
+    else:
+        # ---------------------------------------------------------
+        # Case 2: dotted path (object.attribute.attribute...)
+        # ---------------------------------------------------------
 
-        # Fail if not found
-        raise ValueError(f"{icons.red_dot} Function '{func_name}' not found in namespace!")
-
-    # ---------------------------------------------------------
-    # Case 2: dotted path (object.attribute.attribute...)
-    # ---------------------------------------------------------
-
-    # The first element must exist in the namespace (e.g., "admin")
-    root_name = parts[0]
-    if root_name not in namespace:
-        raise ValueError(f"{icons.red_dot} '{root_name}' not found in namespace!")
-
-    # Start resolving from the root object
-    obj = namespace[root_name]
-
-    # Walk through each attribute in the dotted path
-    for attr in parts[1:]:
-        # Each attribute must exist on the current object
-        if not hasattr(obj, attr):
-            raise ValueError(f"{icons.red_dot} Attribute '{attr}' not found in '{root_name}'!")
-        obj = getattr(obj, attr)
-
-    # Return the final resolved object (function, method, etc.)
-    return obj
+        # The first element must exist in the namespace (e.g., "admin")
+        module_name = parts[0]
+        name = parts[1]
+        if module_name in namespace:
+            return getattr(namespace[module_name], name)
+        else:
+            # Fail if not found
+            raise ValueError(f"{icons.red_dot} '{module_name}' not found in namespace!")
 
 def _count_rows(obj):
     """
@@ -3026,7 +3017,7 @@ def _deep_merge(a, b):
         keys = set(a.keys()) | set(b.keys())
         for k in keys:
             if k in a and k in b:
-                merged[k] = deep_merge(a[k], b[k])
+                merged[k] = _deep_merge(a[k], b[k])
             elif k in a:
                 merged[k] = a[k]
             else:
