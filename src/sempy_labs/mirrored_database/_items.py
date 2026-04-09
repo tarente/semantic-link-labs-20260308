@@ -166,7 +166,7 @@ def get_mirroring_status(
     )
     response = _base_api(
         request=f"/v1/workspaces/{workspace_id}/mirroredDatabases/{item_id}/getMirroringStatus",
-        method='post',
+        method="post",
     )
 
     return response.json().get("status", {})

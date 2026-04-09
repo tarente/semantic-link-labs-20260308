@@ -1922,6 +1922,7 @@ def _get_column_aggregate(
     if _pure_python_notebook():
         import polars as pl
         from polars.datatypes import Datetime, Decimal
+
         lf = pl.scan_delta(path)
         schema = lf.collect_schema()
 

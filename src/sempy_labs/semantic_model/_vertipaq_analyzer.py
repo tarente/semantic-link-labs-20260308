@@ -128,7 +128,7 @@ def cast_to_type(value, type_):
             format="%Y-%m-%d %H:%M:%S",
             errors="coerce",
             utc=True,
-        )
+        ),
     }
 
     # Handle null / empty values
@@ -550,7 +550,7 @@ def vertipaq_analyzer(
                 elif "AzureStorage.DataLake" in expr:
                     direct_lake_type = "OneLake"
                 s = next(
-                    s for s in sources if s.get("ExpressionName") == expression_name
+                    s for s in sources if s.get("expressionName") == expression_name
                 )
                 source = s.get("itemName")
                 source_type = s.get("itemType")
@@ -907,7 +907,9 @@ def vertipaq_analyzer(
         format_funcs = {
             "int": lambda x: f"{int(x):,}" if pd.notna(x) and x != "<NA>" else "",
             "pct": lambda x: f"{float(x):.2f}%" if pd.notna(x) and x != "<NA>" else "",
-            "double": lambda x: f"{float(x):.4f}" if pd.notna(x) and x != "<NA>" else "",
+            "double": lambda x: (
+                f"{float(x):.4f}" if pd.notna(x) and x != "<NA>" else ""
+            ),
             "": lambda x: f"{x}",
         }
 
@@ -1549,9 +1551,9 @@ def visualize_vertipaq(dataframes, dataset_name, vertipaq_map=None, default_sort
                 f'<div class="vpx-card"{tip_attr}>'
                 f'<div class="vpx-card-label">{col}</div>'
                 f'<div class="vpx-card-value">{cell_val}</div>'
-                f'</div>'
+                f"</div>"
             )
-        html_parts.append('</div>')
+        html_parts.append("</div>")
 
     # Tab icons (monochrome SVGs using currentColor for light/dark mode)
     tab_icons = {
@@ -1564,8 +1566,22 @@ def visualize_vertipaq(dataframes, dataset_name, vertipaq_map=None, default_sort
 
     # Columns that should show data bars per tab
     data_bar_columns = {
-        "Tables": ["Total Size", "Row Count", "Data Size", "Dictionary Size", "Relationship Size", "Hierarchy Size", "User Hierarchy Size"],
-        "Columns": ["Cardinality", "Total Size", "Data Size", "Dictionary Size", "Hierarchy Size"],
+        "Tables": [
+            "Total Size",
+            "Row Count",
+            "Data Size",
+            "Dictionary Size",
+            "Relationship Size",
+            "Hierarchy Size",
+            "User Hierarchy Size",
+        ],
+        "Columns": [
+            "Cardinality",
+            "Total Size",
+            "Data Size",
+            "Dictionary Size",
+            "Hierarchy Size",
+        ],
         "Relationships": ["Used Size"],
         "Partitions": ["Record Count"],
         "Hierarchies": ["Used Size"],
@@ -1618,7 +1634,7 @@ def visualize_vertipaq(dataframes, dataset_name, vertipaq_map=None, default_sort
             )
             html_parts.append(
                 f'<button class="vpx-bar-toggle vpx-bars-active" '
-                f'onclick="vpxToggleBars_{uid}(this, \'{panel_id}\')" '
+                f"onclick=\"vpxToggleBars_{uid}(this, '{panel_id}')\" "
                 f'title="Toggle data bars">{bar_toggle_icon}Bars</button>'
             )
 
@@ -1673,11 +1689,7 @@ def visualize_vertipaq(dataframes, dataset_name, vertipaq_map=None, default_sort
                             try:
                                 max_val = max(
                                     max_val,
-                                    float(
-                                        str(v)
-                                        .replace(",", "")
-                                        .replace("%", "")
-                                    ),
+                                    float(str(v).replace(",", "").replace("%", "")),
                                 )
                             except ValueError:
                                 pass
@@ -1697,14 +1709,10 @@ def visualize_vertipaq(dataframes, dataset_name, vertipaq_map=None, default_sort
                         cls_parts.append("vpx-numeric")
                     if is_bar:
                         cls_parts.append("vpx-bar-cell")
-                    cls_attr = (
-                        f' class="{" ".join(cls_parts)}"' if cls_parts else ""
-                    )
+                    cls_attr = f' class="{" ".join(cls_parts)}"' if cls_parts else ""
                     if is_bar and cell_val:
                         try:
-                            num_val = float(
-                                cell_val.replace(",", "").replace("%", "")
-                            )
+                            num_val = float(cell_val.replace(",", "").replace("%", ""))
                             pct = (num_val / bar_maxes[col]) * 100
                         except ValueError:
                             pct = 0
