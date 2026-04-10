@@ -2886,13 +2886,39 @@ def get_model_id(item_id: UUID, prefix: str = None, headers: dict = None):
 
 def _resolve_function(func_name: str, namespace):
     """
-    Resolve a function name string into an actual callable/function object.
+    Resolve a function name string into a callable using only the provided namespace.
 
-    Rules:
-      - Only search inside the provided namespace (usually globals()).
-      - Support dotted paths like "admin.list_events".
-      - Do NOT import modules.
-      - Fail immediately if any part of the path does not exist.
+    This resolver supports:
+      - Direct function names (e.g., "my_function")
+      - Single-level dotted names where the left side is an object in `namespace`
+        and the right side is an attribute of that object (e.g., "admin.list_events")
+
+    It does NOT:
+      - Import modules
+      - Resolve multi-level dotted paths (e.g., "a.b.c.func")
+      - Search outside the supplied `namespace`
+
+    Resolution fails immediately if any part of the name cannot be found.
+
+    Parameters
+    ----------
+    func_name : str
+        Name of the function to resolve. May be a simple name or a single-level
+        dotted path.
+
+    namespace : dict
+        Dictionary in which the function or root object must exist (typically `globals()`).
+
+    Returns
+    -------
+    callable
+        The resolved function object.
+
+    Raises
+    ------
+    ValueError
+        If the function name cannot be resolved, or if any part of a dotted path
+        does not exist in the provided namespace.
     """
 
     # Split the function name into parts (e.g., "admin.list_events" → ["admin", "list_events"])
@@ -2914,7 +2940,7 @@ def _resolve_function(func_name: str, namespace):
             )
     else:
         # ---------------------------------------------------------
-        # Case 2: dotted path (object.attribute.attribute...)
+        # Case 2: dotted path (object.attribute)
         # ---------------------------------------------------------
 
         # The first element must exist in the namespace (e.g., "admin")
@@ -2929,13 +2955,43 @@ def _resolve_function(func_name: str, namespace):
 
 def _count_rows(obj):
     """
-    Count the number of logical records in an arbitrary structure.
-    Ensures consistent results between dicts and pandas DataFrames.
+    Count the number of logical records represented by an arbitrary object.
 
-    Error handling:
-    - Gracefully handles unexpected types
-    - Protects against malformed dicts/lists
-    - Never crashes on non-iterable or mixed-type structures
+    This utility normalizes row‑counting behavior across heterogeneous
+    structures (DataFrames, Series, lists, dicts), ensuring consistent
+    semantics when aggregating or merging results from multiple API calls.
+
+    Parameters
+    ----------
+    obj : Any
+        The object whose logical row count should be inferred. Supported
+        structures include:
+        - pandas.DataFrame
+        - pandas.Series
+        - list of dicts
+        - dict of lists
+        - any other object, which is treated as a single record
+
+    Behavior
+    --------
+    - DataFrame → number of rows.
+    - Series → number of elements.
+    - List of dicts → each element is one logical record.
+    - Mixed or non-dict lists → treated as a single record.
+    - Dict of lists → lists interpreted as column vectors; the maximum
+      list length is used as the row count.
+    - Any other type → treated as a single logical record.
+
+    Error Handling
+    --------------
+    - Never raises due to malformed or unexpected structures.
+    - Silently ignores non-countable values inside dicts/lists.
+    - Falls back to a row count of 1 on any exception.
+
+    Returns
+    -------
+    int
+        The inferred number of logical records represented by `obj`.
     """
 
     try:
@@ -3042,21 +3098,64 @@ def execute_in_timeslots(
     func_name, parameters_list, max_per_slot, slot_seconds, namespace
 ):
     """
-    Execute a function repeatedly with rate limiting, merging results and
-    logging progress.
+    Execute a function repeatedly using a fixed‑window rate limiter, merging
+    results and logging progress.
 
-    - Resolves the target function once from the given namespace.
-    - Processes each parameters as a separate call with arguments in parameters_list.
-    - Enforces a sliding‑window limit: max_per_slot calls per slot_seconds.
-    - Sleeps or resets the window when limits are reached.
-    - Merges results using deep_merge and counts rows via count_rows.
-    - On error, logs the failure and returns partial results immediately.
+    This helper resolves the target function once, then executes it for each
+    parameter set in `parameters_list` while enforcing a fixed‑window rate
+    limit. Results from each call are merged using `_deep_merge`, and row
+    counts are accumulated via `_count_rows`. If any call fails, the function
+    logs the error and returns partial results immediately.
 
-    Returns the merged result of calling the function func_name with the parameters in the parameters_list.
+    Parameters
+    ----------
+    func_name : str
+        Name of the function to execute. May be a simple name or a single-level
+        dotted path. Resolved once using `_resolve_function` against `namespace`.
+
+    parameters_list : list of dict
+        A list where each element is a dictionary of keyword arguments to pass
+        to the resolved function. Each dictionary represents one independent
+        execution.
+
+    max_per_slot : int
+        Maximum number of allowed calls within a single fixed window.
+
+    slot_seconds : float
+        Duration (in seconds) of each fixed‑window interval.
+
+    namespace : dict
+        Namespace (typically `globals()`) used to resolve `func_name` into a
+        callable. No imports are performed.
+
+    Behavior
+    --------
+    - Resolves the target function once for efficiency.
+    - Iterates through each parameter set and executes the function.
+    - Enforces a **fixed‑window** rate limit:
+        * Tracks a single window start timestamp (`window_start`).
+        * Allows up to `max_per_slot` calls within each `slot_seconds` window.
+        * If the window expires (`elapsed >= slot_seconds`), the window resets.
+        * If the call limit is reached before expiration, the function sleeps
+          until the window duration has passed, then resets.
+    - Merges each result into an accumulated structure using `_deep_merge`.
+    - Counts logical rows returned by each call via `_count_rows`.
+    - Logs progress, rate‑limit state, and call details.
+
+    Error Handling
+    --------------
+    - Any exception during a function call is logged.
+    - Execution stops immediately on error.
+    - Partial merged results accumulated so far are returned.
+
+    Returns
+    -------
+    dict or pandas.DataFrame or None
+        The merged result of all successful calls. The structure depends on the
+        return type of the underlying function and the behavior of `_deep_merge`.
     """
 
     results = None  # Accumulated DataFrame OR merged dict
-    results_dict = []  # Store raw dict results
     total_rows = 0  # Total number of rows returned across all calls
 
     # Initialize sliding‑window rate limiting
@@ -3071,7 +3170,7 @@ def execute_in_timeslots(
 
         elapsed = time.time() - window_start
 
-        print("\n====================================================")
+        print("====================================================")
         print(f"Iteration {idx}")
 
         if elapsed >= slot_seconds:
@@ -3089,7 +3188,7 @@ def execute_in_timeslots(
             window_start = time.time()
             elapsed = time.time() - window_start
             calls_in_window = 1
-            print("{icons.in_progress} Window reset after sleep.")
+            print(f"{icons.in_progress} Window reset after sleep.")
 
         print(f"Elapsed in current window: {elapsed:.2f}s")
         print(f"Calls in current window: {calls_in_window}/{max_per_slot}")

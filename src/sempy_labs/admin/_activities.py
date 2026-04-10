@@ -183,29 +183,44 @@ def list_activity_events_multiple_days(
     return_dataframe: bool = True,
 ) -> pd.DataFrame | dict:
     """
-    Shows a list of audit activity events for a tenant.
+    Retrieves audit activity events for multiple days by repeatedly calling the
+    `Admin - Get Activity Events` API for each day in the generated window.
 
-    This is a wrapper function for the following API: `Admin - Get Activity Events <https://learn.microsoft.com/rest/api/power-bi/admin/get-activity-events>`_.
-
-    Service Principal Authentication is supported (see `here <https://github.com/microsoft/semantic-link-labs/blob/main/notebooks/Service%20Principal.ipynb>`_ for examples).
+    This is a wrapper around the single-day `list_activity_events` function.
+    For each iteration, it constructs a full-day ISO8601 time window
+    (00:00:00.000Z → 23:59:59.999Z) and executes the calls in rate-limited
+    timeslots.
 
     Parameters
     ----------
-    start_time : str
-        Start date and time of the window for audit event results. Example: "2024-09-25T07:55:00".
-    end_time : str
-        End date and time of the window for audit event results. Example: "2024-09-25T08:55:00".
-    activity_filter : str, default=None
-        Filter value for activities. Example: 'viewreport'.
-    user_id_filter : str, default=None
-        Email address of the user.
+    start_day : str
+        The first day to query, in format ``"YYYY-MM-DD"``.
+        Example: ``"2024-09-25"``.
+
+    num_days : int
+        Number of day-windows to retrieve. A value of 3 means three separate
+        24-hour windows will be queried.
+
+    inc_days : int, default=1
+        Step size (in days) between each window.
+        Example: ``inc_days=2`` queries every other day.
+
+    activity_filter : str, optional
+        Filter for activity types.
+        Example: ``"viewreport"``.
+
+    user_id_filter : str, optional
+        Email address of the user to filter on.
+
     return_dataframe : bool, default=True
-        If True the response is a pandas.DataFrame. If False returns a dict. Default True
+        If True, returns a pandas DataFrame.
+        If False, returns a dict.
 
     Returns
     -------
-    pandas.DataFrame | dict
-        A pandas dataframe or dict showing a list of audit activity events for a tenant.
+    pandas.DataFrame or dict
+        Aggregated results from all generated day-windows, returned either as a
+        concatenated DataFrame or a dict depending on `return_dataframe`.
     """
 
     func_name = "list_activity_events"
