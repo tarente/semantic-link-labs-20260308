@@ -106,6 +106,8 @@ def list_workspaces(
                 "state": "State",
                 "type": "Type",
                 "capacityId": "Capacity Id",
+                "tags": "Tags",
+                "domainId": "Domain Id",
             },
             inplace=True,
         )
