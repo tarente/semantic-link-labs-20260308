@@ -1621,24 +1621,30 @@ def lro(
 
 
 def pagination(client, response):
-
     responses = []
-    response_json = response.json()
-    responses.append(response_json)
 
-    # Check for pagination
-    continuation_token = response_json.get("continuationToken")
-    continuation_uri = response_json.get("continuationUri")
-
-    # Loop to handle pagination
-    while continuation_token is not None:
-        response = client.get(continuation_uri)
+    while True:
         response_json = response.json()
         responses.append(response_json)
 
-        # Update the continuation token and URI for the next iteration
         continuation_token = response_json.get("continuationToken")
         continuation_uri = response_json.get("continuationUri")
+
+        # Stop when no more pages
+        if not continuation_token:
+            break
+
+        try:
+            response = client.get(continuation_uri)
+
+        except Exception as e:
+            # Handle FabricHTTPException (404)
+            if hasattr(e, "response") and e.response is not None:
+                if e.response.status_code == 404:
+                    return responses
+
+            # If it's something else, re-raise
+            raise FabricHTTPException(e.response) if hasattr(e, "response") else e
 
     return responses
 
